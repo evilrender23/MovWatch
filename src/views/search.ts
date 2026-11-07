@@ -1,6 +1,6 @@
 import * as api from "../api";
 import type { Category } from "../api";
-import { titleTile } from "../cards";
+import { languageFilter, titleTile } from "../cards";
 import { router, type ViewContext } from "../router";
 import { homeRoute } from "../routes";
 import { setCrumbs } from "../shell";
@@ -77,7 +77,13 @@ export function searchView(root: HTMLElement, ctx: ViewContext, query: string): 
               h("div", { class: "grid grid-posters" }, list.map((c, i) => titleTile(c, i))),
             )
           : null;
-      body.replaceChildren(...[section("Películas", movies), section("Series", series)].filter((x): x is HTMLElement => !!x));
+      const sections = [section("Películas", movies), section("Series", series)].filter((x): x is HTMLElement => !!x);
+      body.replaceChildren(...sections);
+      const filter = await languageFilter(() => sections, ctx.signal);
+      if (filter && !ctx.signal.aborted && lastTab === "titles") {
+        body.prepend(h("div", { class: "filters" }, h("span", { class: "filters-label" }, icon("filter"), "Idioma"), filter.button));
+        filter.refresh();
+      }
     } catch (e) {
       if (!ctx.signal.aborted) body.replaceChildren(errorBox(errMsg(e), () => void showTitles()));
     }

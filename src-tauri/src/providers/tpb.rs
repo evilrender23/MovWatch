@@ -28,6 +28,12 @@ fn category(c: Category) -> &'static str {
     }
 }
 
+/// Torrents asociados a un IMDb en apibay (encuentra también los títulos traducidos u originales,
+/// p. ej. «L'Avare» para «The Miser»).
+pub async fn by_imdb(client: &Client, imdb: &str) -> Result<Vec<Source>> {
+    query(client, imdb, "0").await
+}
+
 async fn query(client: &Client, text: &str, cat: &str) -> Result<Vec<Source>> {
     let items: Vec<Item> = client
         .get("https://apibay.org/q.php")
@@ -60,6 +66,13 @@ async fn query(client: &Client, text: &str, cat: &str) -> Result<Vec<Source>> {
 pub async fn search(client: &Client, q: &Query) -> Result<Vec<Source>> {
     let cat = category(q.category);
     let mut out = query(client, &episode_text(q), cat).await?;
+    // Las películas también por IMDb (nombres en otros idiomas). En series el IMDb es el de la
+    // serie: se filtran luego por temporada/episodio en `keep`.
+    if let Some(imdb) = &q.imdb {
+        if let Ok(more) = by_imdb(client, imdb).await {
+            out.extend(more);
+        }
+    }
     // Para un episodio también sirven los packs de la temporada entera.
     if let (Some(season), Some(_)) = (q.season, q.episode) {
         if let Ok(packs) = query(client, &format!("{} S{season:02}", q.text), cat).await {

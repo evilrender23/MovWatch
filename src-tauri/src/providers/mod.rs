@@ -271,6 +271,67 @@ pub async fn search(client: &Client, q: &Query) -> Result<SearchResult> {
     Ok(SearchResult { sources, providers: statuses })
 }
 
+/// ¿Hay algún torrent con audio en `lang` para este título? Consulta ligera (The Pirate Bay y
+/// Knaben, con la palabra del idioma) para filtrar el catálogo; comprueba que el nombre del
+/// torrent corresponda al título (y al año en películas).
+pub async fn has_language(client: &Client, imdb: &str, series: bool, title: &str, year: Option<&str>, lang: &str) -> Result<bool> {
+    let Some(kw) = language_keyword(lang) else {
+        // Inglés u original: casi todo está disponible.
+        return Ok(true);
+    };
+    let year = year.and_then(|y| y.get(..4)).filter(|y| y.chars().all(|c| c.is_ascii_digit()));
+    let q = Query {
+        text: match (series, year) {
+            (false, Some(y)) => format!("{title} {y} {kw}"),
+            _ => format!("{title} {kw}"),
+        },
+        category: if series { Category::Tv } else { Category::Movie },
+        audio_lang: lang.to_owned(),
+        ..Default::default()
+    };
+    let (by_id, by_text) = tokio::join!(
+        tokio::time::timeout(PROVIDER_TIMEOUT, tpb::by_imdb(client, imdb)),
+        tokio::time::timeout(PROVIDER_TIMEOUT, knaben::search(client, &q)),
+    );
+    let by_id = by_id.ok().and_then(|r| r.ok()).unwrap_or_default();
+    let by_text = by_text.ok().and_then(|r| r.ok()).unwrap_or_default();
+    let wanted = normalize_title(title);
+    let sibling = match lang {
+        "spa" => "lat",
+        "lat" => "spa",
+        "por" => "pob",
+        "pob" => "por",
+        _ => "",
+    };
+    let in_lang = |s: &Source| s.languages.iter().any(|l| l == lang || (!sibling.is_empty() && l == sibling));
+    // Por IMDb el título ya es seguro; por texto se comprueba nombre y año. Basta con que exista
+    // (aunque ahora no tenga semillas, suele haber otras copias en ese idioma).
+    Ok(by_id.iter().any(in_lang)
+        || by_text.iter().any(|s| {
+            in_lang(s) && normalize_title(&s.title).contains(&wanted) && (series || year.is_none_or(|y| s.title.contains(y)))
+        }))
+}
+
+/// "L'Avare: (1980)" → "l avare 1980" (minúsculas, sin acentos ni signos).
+fn normalize_title(t: &str) -> String {
+    let t: String = t
+        .to_lowercase()
+        .chars()
+        .map(|c| match c {
+            'á' | 'à' | 'â' | 'ä' => 'a',
+            'é' | 'è' | 'ê' | 'ë' => 'e',
+            'í' | 'ì' | 'î' | 'ï' => 'i',
+            'ó' | 'ò' | 'ô' | 'ö' => 'o',
+            'ú' | 'ù' | 'û' | 'ü' => 'u',
+            'ñ' => 'n',
+            'ç' => 'c',
+            c if c.is_alphanumeric() => c,
+            _ => ' ',
+        })
+        .collect();
+    t.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Limpia el texto y deduce la temporada/episodio si vienen escritos ("Serie S01E02").
 fn normalize(q: &Query) -> Query {
     let mut q = q.clone();
@@ -721,6 +782,9 @@ mod live {
         }
         assert!(r.sources.iter().any(|s| episode_of(&s.title) == Some((1, 2))));
 
+        for (id, t, y) in [("tt0078813", "The Miser", "1980"), ("tt1375666", "Inception", "2010"), ("tt0398718", "Avare", "1964"), ("tt0313232", "The Vagabond", "1970")] {
+            println!("¿{t} en francés? {:?}", has_language(&client, id, false, t, Some(y), "fre").await);
+        }
         let fr = Query { audio_lang: "fre".into(), ..movie.clone() };
         let r = search(&client, &fr).await.unwrap();
         println!("--- en francés");

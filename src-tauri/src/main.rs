@@ -49,7 +49,7 @@ fn main() {
             let actualizador = update::Actualizador::default();
             let handle = app.handle().clone();
             actualizador.vigilar(app.handle().clone(), move || handle.state::<AppState>().store.settings().auto_update);
-            app.manage(AppState { http, engine, remuxer, server, store, actualizador, temp: cache.join("subtitulos") });
+            app.manage(AppState { http, engine, remuxer, server, store, actualizador, temp: cache.join("subtitulos"), lang_cache: Default::default() });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -59,6 +59,7 @@ fn main() {
             commands::providers_list,
             commands::search_torrents,
             commands::audio_languages,
+            commands::has_language,
             commands::torrent_open,
             commands::torrent_status,
             commands::torrent_list,

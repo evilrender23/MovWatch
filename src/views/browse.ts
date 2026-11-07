@@ -1,5 +1,5 @@
 import type { Card, CatalogId, Kind } from "../api";
-import { titleTile } from "../cards";
+import { languageFilter, titleTile } from "../cards";
 import { getCatalog } from "../data";
 import type { ViewContext } from "../router";
 import { setCrumbs } from "../shell";
@@ -117,6 +117,7 @@ export function browseView(root: HTMLElement, ctx: ViewContext, kind: Kind): voi
     items = items.concat(fresh);
     grid.append(...fresh.map((c, i) => titleTile(c, i)));
     count.textContent = String(items.length);
+    langFilter?.refresh();
     footer.hidden = list.length < 20;
   };
 
@@ -151,6 +152,14 @@ export function browseView(root: HTMLElement, ctx: ViewContext, kind: Kind): voi
       moreBtn.disabled = false;
     }
   };
+
+  let langFilter: { button: HTMLElement; refresh: () => void } | null = null;
+  void languageFilter(() => [grid], ctx.signal).then((f) => {
+    if (!f || ctx.signal.aborted) return;
+    langFilter = f;
+    chips.before(f.button, h("span", { class: "filters-sep" }));
+    f.refresh();
+  });
 
   renderFilters();
   void reload();

@@ -259,6 +259,9 @@ export interface Language {
   name: string;
 }
 export const audioLanguages = () => invoke<Language[]>("audio_languages");
+/** ¿Hay torrents con audio en `lang` para este título? */
+export const hasLanguage = (card: Pick<Card, "id" | "kind" | "name" | "year">, lang: string) =>
+  invoke<boolean>("has_language", { id: card.id, kind: card.kind, title: card.name, year: card.year, lang });
 export const searchTorrents = (query: TorrentQuery) => invoke<SearchResult>("search_torrents", { query });
 export const torrentOpen = async (
   magnet: string,

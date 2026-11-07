@@ -52,6 +52,7 @@ export function titleTile(card: Card, index = 0, opts: { progress?: number; badg
     {
       class: "tile",
       style: `--i:${Math.min(index, 18)}`,
+      dataset: { id: card.id, kind: card.kind, name: card.name, year: card.year ?? "" },
       attrs: { "aria-label": card.name },
       onclick: () => router.navigate(detailRoute(card.kind, card.id)),
     },
@@ -212,4 +213,82 @@ export function shelf(title: string, items: HTMLElement[], opts: { note?: string
     ),
     track,
   );
+}
+
+// ---------------------------------------------------------------------------
+// Filtro «Sólo en <idioma>»: oculta los títulos sin torrents con audio en ese idioma.
+// ---------------------------------------------------------------------------
+
+/** Activado/desactivado durante la sesión (empieza como diga Ajustes). */
+let langFilterOn: boolean | null = null;
+const langResults = new Map<string, boolean>();
+const LANG_CONCURRENCY = 5;
+
+/**
+ * Botón de filtro por idioma para una rejilla de títulos. Devuelve el botón (o null si no hay
+ * idioma elegido) y `refresh`, que hay que llamar cuando se añaden mosaicos.
+ */
+export async function languageFilter(host: () => HTMLElement[], signal: AbortSignal): Promise<{ button: HTMLElement; refresh: () => void } | null> {
+  const [settings, languages] = await Promise.all([api.getSettings(), api.audioLanguages()]);
+  const lang = settings.audioLang;
+  if (!lang || lang === "eng" || signal.aborted) return null;
+  const name = (languages.find((l) => l.code === lang)?.name ?? lang).toLowerCase();
+  langFilterOn ??= settings.onlyAudioLang;
+  const label = h("span");
+  const button = h("button", { class: "chip chip-lang" }, icon("globe"), label);
+  let run = 0;
+
+  const refresh = () => {
+    const my = ++run;
+    const tiles = host().flatMap((g) => [...g.querySelectorAll<HTMLElement>(".tile[data-id]")]);
+    button.classList.toggle("active", !!langFilterOn);
+    button.setAttribute("aria-pressed", String(!!langFilterOn));
+    if (!langFilterOn) {
+      tiles.forEach((t) => {
+        t.hidden = false;
+        t.classList.remove("lang-checking");
+      });
+      label.textContent = `Sólo en ${name}`;
+      return;
+    }
+    const pending = tiles.filter((t) => !langResults.has(`${t.dataset.id}:${lang}`));
+    const paint = () => {
+      let shown = 0;
+      let checking = 0;
+      for (const t of tiles) {
+        const r = langResults.get(`${t.dataset.id}:${lang}`);
+        t.classList.toggle("lang-checking", r === undefined);
+        t.hidden = r === false;
+        if (r === undefined) checking++;
+        if (r === true) shown++;
+      }
+      label.textContent = checking ? `Sólo en ${name} · comprobando ${tiles.length - checking}/${tiles.length}` : `Sólo en ${name} · ${shown} de ${tiles.length}`;
+    };
+    paint();
+    let next = 0;
+    const worker = async () => {
+      while (next < pending.length && my === run && !signal.aborted) {
+        const t = pending[next++];
+        const key = `${t.dataset.id}:${lang}`;
+        if (langResults.has(key)) continue;
+        try {
+          const ok = await api.hasLanguage(
+            { id: t.dataset.id!, kind: t.dataset.kind as Card["kind"], name: t.dataset.name!, year: t.dataset.year || null },
+            lang,
+          );
+          langResults.set(key, ok);
+        } catch {
+          langResults.set(key, true); // ante la duda, no se oculta
+        }
+        if (my === run && !signal.aborted) paint();
+      }
+    };
+    void Promise.all(Array.from({ length: LANG_CONCURRENCY }, worker));
+  };
+
+  button.onclick = () => {
+    langFilterOn = !langFilterOn;
+    refresh();
+  };
+  return { button, refresh };
 }

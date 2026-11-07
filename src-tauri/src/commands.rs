@@ -26,6 +26,7 @@ pub struct AppState {
     pub store: Store,
     pub actualizador: Actualizador,
     pub temp: PathBuf,
+    pub lang_cache: std::sync::Mutex<std::collections::HashMap<String, bool>>,
 }
 
 // ---- Catálogo ----
@@ -61,6 +62,25 @@ pub struct Language {
 #[tauri::command]
 pub fn audio_languages() -> Vec<Language> {
     providers::AUDIO_LANGUAGES.iter().map(|(code, name)| Language { code, name }).collect()
+}
+
+/// ¿Existe en ese idioma? Se recuerda durante la sesión.
+#[tauri::command]
+pub async fn has_language(
+    state: State<'_, AppState>,
+    id: String,
+    kind: Kind,
+    title: String,
+    year: Option<String>,
+    lang: String,
+) -> Result<bool> {
+    let key = format!("{id}:{lang}");
+    if let Some(v) = state.lang_cache.lock().unwrap().get(&key) {
+        return Ok(*v);
+    }
+    let v = providers::has_language(&state.http, &id, kind == Kind::Series, &title, year.as_deref(), &lang).await?;
+    state.lang_cache.lock().unwrap().insert(key, v);
+    Ok(v)
 }
 
 #[tauri::command]

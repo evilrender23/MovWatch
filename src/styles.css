@@ -4296,3 +4296,22 @@ body.is-cinema .stage-cinema {
   opacity: 0.45;
   cursor: default;
 }
+
+.chip-lang .icon {
+  width: 12px;
+  height: 12px;
+}
+
+.filters-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--stroke-2);
+}
+
+.tile.lang-checking {
+  opacity: 0.45;
+}
+
+.tile[hidden] {
+  display: none;
+}
