@@ -45,7 +45,7 @@ export function sourcesView(root: HTMLElement, ctx: ViewContext, watch: WatchCon
   api.getSettings().then(
     (s) => {
       if (ctx.signal.aborted) return;
-      host.append(sourcesTable(ctx.signal, queryFor(watch, s.audioLang), watch));
+      host.append(sourcesTable(ctx.signal, queryFor(watch, s.audioLang), watch, s.onlyAudioLang));
     },
     (e: unknown) => host.append(errorBox(errMsg(e))),
   );
@@ -55,8 +55,10 @@ export function sourcesView(root: HTMLElement, ctx: ViewContext, watch: WatchCon
  * Tabla de torrents con filtros y estado de cada proveedor. `watch` = null en la búsqueda libre:
  * al reproducir se usa el nombre del torrent como título.
  */
-export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: WatchContext | null): HTMLElement {
+export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: WatchContext | null, onlyLang = false): HTMLElement {
   const lang = query.audioLang ?? "";
+  // Con «Sólo en mi idioma» activado en Ajustes, el filtro empieza puesto.
+  if (lang && onlyLang) filters.lang = true;
   const langLabel = lang ? langName(lang) : "";
   const box = h("div", { class: "sources" });
   const toolbar = h("div", { class: "src-toolbar" });
@@ -165,7 +167,11 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
     if (!items.length) {
       list.replaceChildren(
         empty(
-          result.sources.length ? "Ninguna fuente coincide con los filtros." : "No se encontraron torrents.",
+          result.sources.length
+            ? filters.lang && !result.sources.some((s) => sourceHasLang(s.languages, lang))
+              ? `No hay ninguna fuente con audio en ${langLabel.toLowerCase()} para este título.`
+              : "Ninguna fuente coincide con los filtros."
+            : "No se encontraron torrents.",
           result.sources.length ? "Quita algún filtro de arriba." : "Prueba más tarde o busca el título original en la búsqueda libre.",
         ),
       );
@@ -213,7 +219,7 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
     try {
       result = await getTorrents({ ...query, sort: "smart" }, refresh);
       if (signal.aborted) return;
-      if (filters.lang && !result.sources.some((s) => sourceHasLang(s.languages, lang))) filters.lang = false;
+
       renderToolbar();
       renderProviders();
       renderList();
@@ -229,9 +235,20 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
 }
 
 /** Elige la mejor fuente automáticamente (botón "Ver ahora"). */
-export async function bestSource(watch: WatchContext, audioLang: string, exclude: Set<string> = new Set()): Promise<Source> {
+export async function bestSource(watch: WatchContext, audioLang: string, exclude: Set<string> = new Set(), onlyLang = false): Promise<Source> {
   const res = await getTorrents({ ...queryFor(watch, audioLang), sort: "smart" });
-  const fresh = res.sources.filter((s) => !exclude.has(s.infoHash));
+  let fresh = res.sources.filter((s) => !exclude.has(s.infoHash));
+  if (onlyLang && audioLang) {
+    fresh = fresh.filter((s) => sourceHasLang(s.languages, audioLang));
+    if (!fresh.length) {
+      const name = langName(audioLang).toLowerCase();
+      throw new Error(
+        exclude.size
+          ? `No quedan más fuentes con audio en ${name}.`
+          : `No hay ninguna fuente con audio en ${name} para este título. Puedes desactivar «Sólo en este idioma» en Ajustes.`,
+      );
+    }
+  }
   const ok = fresh.filter((s) => !s.tags.some((t) => t === "CAM" || t === "TS") && s.seeders >= 3);
   // Tras una fuente lenta, prima las semillas sobre la calidad.
   if (exclude.size) ok.sort((a, b) => b.seeders - a.seeders);

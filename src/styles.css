@@ -4291,3 +4291,8 @@ body.is-cinema .stage-cinema {
     width: min(560px, 80%);
   }
 }
+
+.set-row.is-disabled {
+  opacity: 0.45;
+  cursor: default;
+}

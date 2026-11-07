@@ -44,6 +44,8 @@ pub struct Settings {
     pub subtitle_lang: String,
     /// Idioma de audio preferido (ISO 639-2: "spa", "fre"…); "" = el original, sin preferencia.
     pub audio_lang: String,
+    /// Mostrar y usar sólo fuentes con audio en `audio_lang`.
+    pub only_audio_lang: bool,
     /// Pasar al siguiente episodio al terminar.
     pub auto_next: bool,
     /// Buscar y compilar versiones nuevas en segundo plano (ver `update.rs`).
@@ -62,6 +64,7 @@ impl Default for Settings {
             disabled_providers: Vec::new(),
             subtitle_lang: "spa".into(),
             audio_lang: "spa".into(),
+            only_audio_lang: false,
             auto_next: true,
             auto_update: true,
         }

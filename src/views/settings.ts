@@ -124,6 +124,19 @@ function renderForm(
   );
   const autoNext = switchInput(settings.autoNext);
   const autoUpdate = switchInput(settings.autoUpdate);
+  const onlyLang = switchInput(settings.onlyAudioLang && !!settings.audioLang);
+  const onlyLangRow = toggleRow(
+    "Sólo en este idioma",
+    "Oculta las fuentes que no indican audio en el idioma elegido; «Ver ahora» sólo reproduce versiones en ese idioma.",
+    onlyLang,
+  );
+  const syncOnlyLang = () => {
+    onlyLang.disabled = !audioLang.value;
+    if (!audioLang.value) onlyLang.checked = false;
+    onlyLangRow.classList.toggle("is-disabled", !audioLang.value);
+  };
+  audioLang.addEventListener("change", syncOnlyLang);
+  syncOnlyLang();
   const subLang = h("select", { class: "select" }, ...SUB_LANGS.map(([v, t]) => h("option", { value: v, selected: settings.subtitleLang === v }, t)));
 
   const providerSwitches = providers.map((p) => {
@@ -146,6 +159,7 @@ function renderForm(
           disabledProviders: providerSwitches.filter((x) => !x.input.checked).map((x) => x.p.name),
           subtitleLang: subLang.value,
           audioLang: audioLang.value,
+          onlyAudioLang: onlyLang.checked,
           autoNext: autoNext.checked,
           autoUpdate: autoUpdate.checked,
         };
@@ -199,6 +213,7 @@ function renderForm(
         "Busca también lanzamientos en ese idioma, los pone primero en Fuentes y en «Ver ahora», y elige esa pista al reproducir si el archivo trae varias.",
         audioLang,
       ),
+      onlyLangRow,
       row("Subtítulos automáticos", "Se cargan solos (de OpenSubtitles) salvo que el audio ya esté en ese idioma.", subLang),
     ),
     group(

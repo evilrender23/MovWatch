@@ -495,7 +495,7 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
     triedSources.set(key, tried);
     showOverlay("spin", "Buscando otra fuente con más pares…");
     try {
-      const next = await bestSource(watch, settings.audioLang, tried);
+      const next = await bestSource(watch, settings.audioLang, tried, settings.onlyAudioLang);
       if (playback) void api.torrentClose(playback.id, true).catch(() => {});
       playback = null;
       router.replace(playerRoute(watch, next, resumeAt));
@@ -592,7 +592,7 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
       if (!src) {
         if (!watch) throw new Error("No hay ninguna fuente seleccionada.");
         showOverlay("spin", "Buscando la mejor fuente…", "YTS · The Pirate Bay · EZTV · Knaben · TorrentsCSV");
-        src = await bestSource(watch, settings.audioLang);
+        src = await bestSource(watch, settings.audioLang, undefined, settings.onlyAudioLang);
         if (signal.aborted) return;
       }
       statSource.replaceChildren(h("span", { class: `src-q q-${(src.quality ?? "sd").toLowerCase()}` }, src.quality === "2160p" ? "4K" : (src.quality ?? "SD")), shorten(src.title, 64));

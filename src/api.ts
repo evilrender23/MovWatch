@@ -185,6 +185,8 @@ export interface Settings {
   subtitleLang: string;
   /** Idioma del audio (ISO 639-2: "spa", "fre"…); "" = versión original. */
   audioLang: string;
+  /** Mostrar y reproducir sólo fuentes con audio en `audioLang`. */
+  onlyAudioLang: boolean;
   autoNext: boolean;
   autoUpdate: boolean;
 }
