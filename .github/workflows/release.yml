@@ -1,0 +1,103 @@
+# Publica un release de MovWatch en GitHub con los instaladores de Windows y macOS.
+#
+# Se lanza al subir una etiqueta vX.Y.Z (o X.Y.Z) que coincida con la versión de
+# src-tauri/tauri.conf.json, o a mano desde Actions → Publicar release → Run workflow (publica la
+# versión de tauri.conf.json de main). El release siempre se etiqueta vX.Y.Z. Compila con MOVWATCH_RELEASE=1: esas copias no se
+# compilan solas desde main, sino que avisan de cada release nuevo y abren su página.
+#
+# Los instaladores no van firmados: en macOS hay que abrir la app con clic derecho → Abrir la
+# primera vez, y en Windows aceptar el aviso de SmartScreen (Más información → Ejecutar de todas formas).
+name: Publicar release
+
+on:
+  push:
+    tags: ["v*", "[0-9]*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Comprobar versión
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        run: |
+          version="$(node -p "require('./src-tauri/tauri.conf.json').version")"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          if [ "$GITHUB_REF_TYPE" = tag ] && [ "$GITHUB_REF_NAME" != "v$version" ] && [ "$GITHUB_REF_NAME" != "$version" ]; then
+            echo "::error::La etiqueta $GITHUB_REF_NAME no coincide con la versión de tauri.conf.json (v$version)."
+            exit 1
+          fi
+
+  build:
+    name: ${{ matrix.name }}
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            platform: windows-latest
+            args: ""
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            args: --target aarch64-apple-darwin
+          - name: macOS Intel
+            platform: macos-latest
+            args: --target x86_64-apple-darwin
+    runs-on: ${{ matrix.platform }}
+    env:
+      MOVWATCH_RELEASE: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: ${{ matrix.args }}
+
+      - run: npm ci
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ needs.version.outputs.tag }}
+          releaseName: MovWatch ${{ needs.version.outputs.tag }}
+          releaseBody: |
+            ## Descargas
+
+            | Sistema | Archivo |
+            |---|---|
+            | **Windows** | `MovWatch_*_x64-setup.exe` (o el `.msi`) |
+            | **Mac con Apple Silicon** (M1 o posterior) | `MovWatch_*_aarch64.dmg` |
+            | **Mac con Intel** | `MovWatch_*_x64.dmg` |
+
+            Los instaladores no están firmados:
+            - **Mac:** arrastra la app a Aplicaciones y ábrela la primera vez con clic derecho → **Abrir**.
+            - **Windows:** si aparece SmartScreen, pulsa **Más información → Ejecutar de todas formas**.
+
+            Esta copia avisa cuando hay un release nuevo. Si prefieres que se compile y actualice sola
+            desde `main`, instálala con el comando del [README](https://github.com/${{ github.repository }}#instalación).
+          releaseDraft: false
+          prerelease: false
+          includeUpdaterJson: false
+          args: ${{ matrix.args }}

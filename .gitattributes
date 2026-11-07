@@ -1,0 +1,4 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+# Los scripts de shell deben tener LF aunque se clonen en Windows
+*.sh text eol=lf

@@ -1,0 +1,35 @@
+[package]
+name = "movwatch"
+version = "1.0.0"
+description = "MovWatch: películas y series por torrent con subtítulos, con interfaz gráfica para Windows, macOS y Linux. Basado en torrodle."
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/evilrender23/MovWatch"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.13", default-features = false, features = ["native-tls", "charset", "http2", "system-proxy", "gzip", "brotli", "deflate", "cookies", "form", "json", "query", "stream"] }
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread", "sync", "time", "process", "io-util", "fs"] }
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
+librqbit = { version = "9.1", default-features = false, features = ["default-tls"] }
+tokio-util = { version = "0.7", features = ["io"] }
+percent-encoding = "2"
+parking_lot = "0.12"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+regex = "1"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+which = "8"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
