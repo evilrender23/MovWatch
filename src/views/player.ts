@@ -615,18 +615,35 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
         );
       }
 
+      currentSource = src;
       const started = Date.now();
       showOverlay("spin", "Conectando con los pares…", "Descargando los metadatos del torrent");
       const tick = window.setInterval(() => {
         const s = Math.round((Date.now() - started) / 1000);
         const d = overlay.querySelector(".overlay-detail");
         if (mode === "loading" && d && !playback) d.textContent = `Descargando los metadatos del torrent · ${s} s`;
+        // Sin pares tras 20 s: se ofrece cambiar de fuente sin esperar al límite de 2 minutos.
+        if (s >= 20 && watch && !playback && !slowOffered && mode === "loading") {
+          slowOffered = true;
+          overlay.querySelector(".overlay-text")!.textContent = "Esta fuente no encuentra pares.";
+          const actions = overlay.querySelector(".overlay-actions") ?? overlay.appendChild(h("div", { class: "overlay-actions" }));
+          actions.replaceChildren(
+            h("button", { class: "btn btn-sm btn-primary", onclick: () => void tryNextSource() }, icon("bolt"), "Probar otra fuente"),
+            h("button", { class: "btn btn-sm", onclick: () => router.navigate(sourcesRoute(watch)) }, icon("magnet"), "Elegir fuente"),
+          );
+        }
       }, 1000);
       timers.push(tick);
-      playback = await api.torrentOpen(src.magnet, displayTitle(), watch?.season, watch?.episode);
+      const opened = await api.torrentOpen(src.magnet, displayTitle(), watch?.season, watch?.episode);
       window.clearInterval(tick);
+      // Si ya se salió (o se cambió de fuente) mientras conectaba, no dejarlo descargando.
+      if (signal.aborted) {
+        void api.torrentClose(opened.id, true).catch(() => {});
+        return;
+      }
+      playback = opened;
+      slowOffered = false;
       openedAt = Date.now();
-      currentSource = src;
       if (signal.aborted) return;
       timers.push(window.setInterval(() => void pollStatus(), 1000));
       void pollStatus();

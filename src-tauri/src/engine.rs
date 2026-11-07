@@ -110,8 +110,10 @@ impl Engine {
         if !magnet.starts_with("magnet:") {
             return Err(msg("El enlace no es un magnet."));
         }
+        // Muchos magnets (TPB, Knaben) traen trackers caídos: se añaden los públicos activos.
+        let magnet = with_trackers(magnet);
         let add = self.session.add_torrent(
-            AddTorrent::from_url(magnet),
+            AddTorrent::from_url(magnet.as_str()),
             Some(AddTorrentOptions { paused: true, overwrite: true, ..Default::default() }),
         );
         let resp = tokio::time::timeout(RESOLVE_TIMEOUT, add)
@@ -273,6 +275,18 @@ fn status_of(id: usize, handle: &librqbit::ManagedTorrent, meta: &Meta) -> Statu
         finished: file_len > 0 && downloaded >= file_len,
         folder: handle.output_folder().to_string_lossy().into_owned(),
     }
+}
+
+fn with_trackers(magnet: &str) -> String {
+    let mut out = magnet.to_owned();
+    for tr in crate::providers::TRACKERS {
+        let enc = percent_encoding::utf8_percent_encode(tr, percent_encoding::NON_ALPHANUMERIC).to_string();
+        if !magnet.contains(&enc) && !magnet.contains(tr) {
+            out.push_str("&tr=");
+            out.push_str(&enc);
+        }
+    }
+    out
 }
 
 pub fn is_video(name: &str) -> bool {

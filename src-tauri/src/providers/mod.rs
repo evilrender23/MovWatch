@@ -45,6 +45,10 @@ pub const TRACKERS: &[&str] = &[
     "udp://explodie.org:6969/announce",
     "udp://tracker.tiny-vps.com:6969/announce",
     "https://tracker.gbitt.info:443/announce",
+    "udp://tracker.dler.org:6969/announce",
+    "udp://opentracker.io:6969/announce",
+    "udp://tracker.qu.ax:6969/announce",
+    "http://tracker.opentrackr.org:1337/announce",
 ];
 
 /// Tiempo máximo por proveedor: uno lento no debe bloquear a los demás.
