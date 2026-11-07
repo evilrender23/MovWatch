@@ -51,7 +51,7 @@ export const episodeLabel = (season: number, episode: number) =>
   `T${season} · E${String(episode).padStart(2, "0")}`;
 
 /** Consulta de torrents para una película o un episodio. */
-export function queryFor(ctx: WatchContext, preferSpanish: boolean): TorrentQuery {
+export function queryFor(ctx: WatchContext, audioLang: string): TorrentQuery {
   const series = ctx.kind === "series";
   const year = ctx.year?.match(/\d{4}/)?.[0] ?? null;
   return {
@@ -61,9 +61,54 @@ export function queryFor(ctx: WatchContext, preferSpanish: boolean): TorrentQuer
     year: series ? null : year,
     season: series ? ctx.season : null,
     episode: series ? ctx.episode : null,
-    preferSpanish,
+    audioLang,
   };
 }
+
+/** Códigos ISO 639-2 equivalentes (ffprobe usa fre/fra, ger/deu…). */
+const LANG_ALIASES: Record<string, string[]> = {
+  spa: ["spa", "es", "esp", "cas"],
+  lat: ["lat", "spa", "es", "es-419"],
+  eng: ["eng", "en"],
+  fre: ["fre", "fra", "fr"],
+  ita: ["ita", "it"],
+  ger: ["ger", "deu", "de"],
+  por: ["por", "pt"],
+  pob: ["pob", "por", "pt", "pt-br"],
+  cat: ["cat", "ca"],
+  rus: ["rus", "ru"],
+  jpn: ["jpn", "ja"],
+  kor: ["kor", "ko"],
+  hin: ["hin", "hi"],
+};
+/** Palabras con que suelen titularse las pistas de audio en cada idioma. */
+const LANG_WORDS: Record<string, RegExp> = {
+  spa: /castellano|españ|espan|spanish/i,
+  lat: /latino|latam|latin/i,
+  eng: /english|ingl/i,
+  fre: /fran[cç]|french|vff|vfq|truefrench/i,
+  ita: /italian/i,
+  ger: /deutsch|german|alem/i,
+  por: /portugu/i,
+  pob: /brasil|brazil|dublado/i,
+  cat: /catal/i,
+  rus: /russ|rus/i,
+  jpn: /japan|japon/i,
+  kor: /korea|corea/i,
+  hin: /hindi/i,
+};
+/** ¿Esta pista (idioma + título del contenedor) es del idioma pedido? */
+export function trackMatches(lang: string, trackLang: string | null, trackTitle: string | null): boolean {
+  if (!lang) return false;
+  const code = (trackLang ?? "").toLowerCase();
+  // En "lat" el título decide (las pistas latinas también se etiquetan "spa").
+  if (lang === "lat") return LANG_WORDS.lat.test(trackTitle ?? "") || (code === "lat");
+  if (lang === "spa" && LANG_WORDS.lat.test(trackTitle ?? "")) return false;
+  return (LANG_ALIASES[lang] ?? [lang]).includes(code) || LANG_WORDS[lang]?.test(trackTitle ?? "") === true;
+}
+/** ¿La fuente trae audio en ese idioma (según su nombre)? */
+export const sourceHasLang = (languages: string[], lang: string) =>
+  !!lang && (languages.includes(lang) || (lang === "spa" && languages.includes("lat")) || (lang === "lat" && languages.includes("spa")));
 
 /** Fuente elegida para reproducir (se guarda para "Continuar viendo" en la misma sesión). */
 const lastSource = new Map<string, Source>();

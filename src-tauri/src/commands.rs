@@ -52,6 +52,17 @@ pub fn providers_list() -> &'static [ProviderInfo] {
     providers::ALL
 }
 
+#[derive(Debug, Serialize)]
+pub struct Language {
+    pub code: &'static str,
+    pub name: &'static str,
+}
+
+#[tauri::command]
+pub fn audio_languages() -> Vec<Language> {
+    providers::AUDIO_LANGUAGES.iter().map(|(code, name)| Language { code, name }).collect()
+}
+
 #[tauri::command]
 pub async fn search_torrents(state: State<'_, AppState>, mut query: Query) -> Result<SearchResult> {
     let settings = state.store.settings();

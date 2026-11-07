@@ -58,7 +58,8 @@ export interface TorrentQuery {
   episode?: number | null;
   providers?: string[];
   sort?: SortBy;
-  preferSpanish?: boolean;
+  /** Idioma de audio preferido (ISO 639-2); "" = sin preferencia. */
+  audioLang?: string;
 }
 
 export interface Source {
@@ -72,6 +73,9 @@ export interface Source {
   url: string | null;
   quality: string | null;
   tags: string[];
+  /** Idiomas de audio indicados en el nombre (ISO 639-2). */
+  languages: string[];
+  multi: boolean;
   uploaded: number | null;
   score: number;
 }
@@ -179,7 +183,8 @@ export interface Settings {
   keepFiles: boolean;
   disabledProviders: string[];
   subtitleLang: string;
-  preferSpanish: boolean;
+  /** Idioma del audio (ISO 639-2: "spa", "fre"…); "" = versión original. */
+  audioLang: string;
   autoNext: boolean;
   autoUpdate: boolean;
 }
@@ -247,6 +252,11 @@ export const searchTitles = (query: string) => invoke<{ movies: Card[]; series: 
 export const titleDetail = (kind: Kind, id: string) => invoke<Detail>("title_detail", { kind, id });
 
 export const providersList = () => invoke<ProviderInfo[]>("providers_list");
+export interface Language {
+  code: string;
+  name: string;
+}
+export const audioLanguages = () => invoke<Language[]>("audio_languages");
 export const searchTorrents = (query: TorrentQuery) => invoke<SearchResult>("search_torrents", { query });
 export const torrentOpen = async (
   magnet: string,

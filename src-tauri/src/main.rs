@@ -58,6 +58,7 @@ fn main() {
             commands::title_detail,
             commands::providers_list,
             commands::search_torrents,
+            commands::audio_languages,
             commands::torrent_open,
             commands::torrent_status,
             commands::torrent_list,

@@ -42,8 +42,8 @@ pub struct Settings {
     pub disabled_providers: Vec<String>,
     /// Idioma de subtítulos preferido (ISO 639-2), "" = ninguno.
     pub subtitle_lang: String,
-    /// Subir los torrents con audio en español.
-    pub prefer_spanish: bool,
+    /// Idioma de audio preferido (ISO 639-2: "spa", "fre"…); "" = el original, sin preferencia.
+    pub audio_lang: String,
     /// Pasar al siguiente episodio al terminar.
     pub auto_next: bool,
     /// Buscar y compilar versiones nuevas en segundo plano (ver `update.rs`).
@@ -61,7 +61,7 @@ impl Default for Settings {
             keep_files: false,
             disabled_providers: Vec::new(),
             subtitle_lang: "spa".into(),
-            prefer_spanish: true,
+            audio_lang: "spa".into(),
             auto_next: true,
             auto_update: true,
         }

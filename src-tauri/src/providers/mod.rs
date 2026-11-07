@@ -88,8 +88,8 @@ pub struct Query {
     /// Nombres de proveedores; vacío = todos.
     pub providers: Vec<String>,
     pub sort: SortBy,
-    /// Subir en la lista los torrents con audio en español.
-    pub prefer_spanish: bool,
+    /// Idioma de audio preferido (ISO 639-2: "spa", "fre"…); vacío = sin preferencia.
+    pub audio_lang: String,
 }
 
 /// Un torrent encontrado (el `Source` de torrodle con más datos).
@@ -110,8 +110,12 @@ pub struct Source {
     pub url: Option<String>,
     /// "2160p", "1080p", "720p", "480p"…
     pub quality: Option<String>,
-    /// Etiquetas legibles: "HEVC", "HDR", "WEB-DL", "Español", "Temporada completa"…
+    /// Etiquetas legibles: "HEVC", "HDR", "WEB-DL", "Francés", "Temporada completa"…
     pub tags: Vec<String>,
+    /// Idiomas de audio detectados en el nombre (ISO 639-2). Vacío = sin indicar (suele ser el original).
+    pub languages: Vec<String>,
+    /// Varias pistas de audio (MULTI/DUAL).
+    pub multi: bool,
     /// Segundos desde UNIX_EPOCH.
     pub uploaded: Option<u64>,
     /// Puntuación usada para el orden "inteligente".
@@ -186,6 +190,7 @@ pub const ALL: &[ProviderInfo] = &[
 pub async fn search(client: &Client, q: &Query) -> Result<SearchResult> {
     let wanted = |name: &str| q.providers.is_empty() || q.providers.iter().any(|p| p.eq_ignore_ascii_case(name));
     let q = &normalize(q);
+    let lang_query = language_keyword(&q.audio_lang).map(|kw| Query { text: format!("{} {kw}", q.text), ..q.clone() });
 
     type Fut<'a> = std::pin::Pin<Box<dyn std::future::Future<Output = Result<Vec<Source>>> + Send + 'a>>;
     let mut tasks: Vec<(&'static str, Fut)> = Vec::new();
@@ -207,6 +212,16 @@ pub async fn search(client: &Client, q: &Query) -> Result<SearchResult> {
     if wanted(torrentscsv::NAME) {
         tasks.push((torrentscsv::NAME, Box::pin(torrentscsv::search(client, q))));
     }
+    // Búsqueda adicional con el idioma en el texto ("Inception french"): los lanzamientos
+    // doblados rara vez aparecen entre los más compartidos de la búsqueda general.
+    if let Some(lq) = &lang_query {
+        if wanted(tpb::NAME) && q.category != Category::Anime {
+            tasks.push((tpb::NAME, Box::pin(tpb::search(client, lq))));
+        }
+        if wanted(knaben::NAME) {
+            tasks.push((knaben::NAME, Box::pin(knaben::search(client, lq))));
+        }
+    }
 
     let started = std::time::Instant::now();
     let results = join_all(tasks.into_iter().map(|(name, fut)| async move {
@@ -227,18 +242,29 @@ pub async fn search(client: &Client, q: &Query) -> Result<SearchResult> {
         match res {
             Ok(list) => {
                 let list: Vec<Source> = list.into_iter().filter(|s| keep(s, q)).collect();
-                statuses.push(ProviderStatus { name: name.into(), count: list.len(), error: None, millis });
+                // La búsqueda por idioma suma al estado del mismo proveedor.
+                if let Some(st) = statuses.iter_mut().find(|st: &&mut ProviderStatus| st.name == name) {
+                    st.count += list.len();
+                    st.millis = st.millis.max(millis);
+                    st.error = None;
+                } else {
+                    statuses.push(ProviderStatus { name: name.into(), count: list.len(), error: None, millis });
+                }
                 for s in list {
                     merge(&mut merged, s);
                 }
             }
-            Err(e) => statuses.push(ProviderStatus { name: name.into(), count: 0, error: Some(e.to_string()), millis }),
+            Err(e) => {
+                if !statuses.iter().any(|st| st.name == name) {
+                    statuses.push(ProviderStatus { name: name.into(), count: 0, error: Some(e.to_string()), millis });
+                }
+            }
         }
     }
 
     let mut sources: Vec<Source> = merged.into_values().collect();
     for s in &mut sources {
-        s.score = score(s, q.prefer_spanish);
+        s.score = score(s, &q.audio_lang);
     }
     sort(&mut sources, q.sort);
     sources.truncate(300);
@@ -312,7 +338,7 @@ pub fn sort(list: &mut [Source], by: SortBy) {
 }
 
 /// Más semillas es mejor, pero con rendimientos decrecientes; las copias de cámara se hunden.
-fn score(s: &Source, prefer_spanish: bool) -> f64 {
+fn score(s: &Source, audio_lang: &str) -> f64 {
     let mut v = ((s.seeders as f64) + 1.0).ln() * 10.0;
     v += match s.quality.as_deref() {
         Some("2160p") => 6.0,
@@ -327,10 +353,36 @@ fn score(s: &Source, prefer_spanish: bool) -> f64 {
     if s.provider.contains(yts::NAME) {
         v += 3.0; // MP4: no hace falta convertir.
     }
-    if prefer_spanish && s.tags.iter().any(|t| t == "Español" || t == "Dual" || t == "Latino") {
-        v += 25.0;
+    v + language_bonus(s, audio_lang)
+}
+
+/// Cuánto sube una fuente por estar en el idioma de audio pedido.
+fn language_bonus(s: &Source, lang: &str) -> f64 {
+    if lang.is_empty() {
+        return 0.0;
     }
-    v
+    if s.languages.iter().any(|l| l == lang) {
+        return 30.0;
+    }
+    // Español de España y latino: mejor el otro que ninguno.
+    let sibling = match lang {
+        "spa" => Some("lat"),
+        "lat" => Some("spa"),
+        "por" => Some("pob"),
+        "pob" => Some("por"),
+        _ => None,
+    };
+    if sibling.is_some_and(|sib| s.languages.iter().any(|l| l == sib)) {
+        return 18.0;
+    }
+    if lang == "eng" {
+        // Sin idioma indicado casi siempre es la versión original en inglés.
+        return if s.languages.is_empty() { 8.0 } else if s.multi { 4.0 } else { -10.0 };
+    }
+    if s.multi {
+        return 6.0;
+    }
+    if s.languages.is_empty() { 0.0 } else { -6.0 }
 }
 
 // ---------------------------------------------------------------------------
@@ -438,9 +490,7 @@ pub fn tags_of(title: &str) -> Vec<String> {
             (r"(?i)\b(hd)?ts\b|\btelesync\b", "TS"),
             (r"(?i)\b(atmos)\b", "Atmos"),
             (r"(?i)\b(5\.1|7\.1)\b", "5.1"),
-            (r"(?i)\b(castellano|spanish|español|espanol|esp|spa)\b", "Español"),
-            (r"(?i)\b(latino|lat)\b", "Latino"),
-            (r"(?i)\b(dual|multi)\b", "Dual"),
+            (r"(?i)\b(dual|multi|multi[ ._-]?audio)\b", "Multi"),
             (r"(?i)\b(subs?|subtitulad[oa]|vose)\b", "Subtítulos"),
             (r"(?i)\byify\b|\byts\b", "MP4"),
         ]
@@ -454,8 +504,109 @@ pub fn tags_of(title: &str) -> Vec<String> {
             out.push((*tag).to_owned());
         }
     }
+    for code in languages_of(title) {
+        let name = language_label(&code).to_owned();
+        if !out.contains(&name) {
+            out.push(name);
+        }
+    }
     if season_pack_of(title).is_some() {
         out.push("Temporada completa".into());
+    }
+    out
+}
+
+/// Idiomas que se pueden pedir: (código, nombre).
+pub const AUDIO_LANGUAGES: &[(&str, &str)] = &[
+    ("spa", "Español"),
+    ("lat", "Latino"),
+    ("eng", "Inglés"),
+    ("fre", "Francés"),
+    ("ita", "Italiano"),
+    ("ger", "Alemán"),
+    ("por", "Portugués"),
+    ("pob", "Portugués (Brasil)"),
+    ("cat", "Catalán"),
+    ("rus", "Ruso"),
+    ("jpn", "Japonés"),
+    ("kor", "Coreano"),
+    ("hin", "Hindi"),
+];
+
+pub fn language_label(code: &str) -> &'static str {
+    AUDIO_LANGUAGES.iter().find(|(c, _)| *c == code).map(|(_, n)| *n).unwrap_or("Otro idioma")
+}
+
+/// Palabra que usan los nombres de lanzamientos en ese idioma (para la búsqueda adicional).
+fn language_keyword(code: &str) -> Option<&'static str> {
+    Some(match code {
+        "spa" => "castellano",
+        "lat" => "latino",
+        "fre" => "french",
+        "ita" => "ita",
+        "ger" => "german",
+        "por" => "portuguese",
+        "pob" => "dublado",
+        "cat" => "catala",
+        "rus" => "rus",
+        "jpn" => "japanese",
+        "kor" => "korean",
+        "hin" => "hindi",
+        _ => return None,
+    })
+}
+
+/// Idiomas de audio escritos en el nombre del torrent.
+pub fn languages_of(title: &str) -> Vec<String> {
+    static RULES: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
+        [
+            (r"(?i)\b(castellano|spanish|español|espanol|esp|spa)\b", "spa"),
+            (r"(?i)\b(latino|lat|latam)\b", "lat"),
+            (r"(?i)\b(english|eng)\b", "eng"),
+            (r"(?i)\b(french|français|francais|truefrench|vff|vfq|vfi|vf2|vf|fre|fra)\b", "fre"),
+            (r"(?i)\b(italian|italiano|ita)\b", "ita"),
+            (r"(?i)\b(german|deutsch|ger|deu)\b", "ger"),
+            (r"(?i)\b(portuguese|português|portugues|por)\b", "por"),
+            (r"(?i)\b(dublado|pt[ ._-]?br|brazilian|nacional)\b", "pob"),
+            (r"(?i)\b(catalan|català|catala)\b", "cat"),
+            (r"(?i)\b(russian|rus)\b", "rus"),
+            (r"(?i)\b(japanese|jpn|jap)\b", "jpn"),
+            (r"(?i)\b(korean|kor)\b", "kor"),
+            (r"(?i)\b(hindi|hin)\b", "hin"),
+        ]
+        .into_iter()
+        .map(|(re, c)| (Regex::new(re).unwrap(), c))
+        .collect()
+    });
+    // Listas de códigos cortos: "EN/ITA/FR/ES/DE".
+    static LIST: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\b[A-Za-z]{2,3}(?:[/+][A-Za-z]{2,3})+\b").unwrap());
+    let mut out: Vec<String> = Vec::new();
+    let mut add = |c: &str| {
+        if !out.iter().any(|x| x == c) {
+            out.push(c.to_owned());
+        }
+    };
+    for (re, code) in RULES.iter() {
+        if re.is_match(title) {
+            add(code);
+        }
+    }
+    for m in LIST.find_iter(title) {
+        for part in m.as_str().split(['/', '+']) {
+            let code = match part.to_ascii_lowercase().as_str() {
+                "es" => "spa",
+                "en" => "eng",
+                "fr" => "fre",
+                "it" => "ita",
+                "de" => "ger",
+                "pt" => "por",
+                "ru" => "rus",
+                "ja" | "jp" => "jpn",
+                "ko" | "kr" => "kor",
+                _ => continue,
+            };
+            add(code);
+        }
     }
     out
 }
@@ -464,11 +615,15 @@ pub fn tags_of(title: &str) -> Vec<String> {
 pub fn source(provider: &str, title: &str, hash: &str, magnet: Option<String>, seeders: u32, leechers: u32, size: u64) -> Source {
     let info_hash = hash.trim().to_ascii_lowercase();
     let magnet = magnet.filter(|m| m.starts_with("magnet:")).unwrap_or_else(|| magnet_from_hash(&info_hash, title));
+    static MULTI: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)\b(dual|multi)\b").unwrap());
+    let languages = languages_of(title);
     Source {
         provider: provider.into(),
         title: title.trim().to_owned(),
         quality: quality_of(title),
         tags: tags_of(title),
+        multi: MULTI.is_match(title) || languages.len() > 1,
+        languages,
         info_hash,
         magnet,
         seeders,
@@ -515,6 +670,20 @@ mod tests {
     }
 
     #[test]
+    fn detects_audio_languages() {
+        assert_eq!(languages_of("Le.Film.2019.TRUEFRENCH.1080p.WEB"), vec!["fre"]);
+        let mut l = languages_of("Movie 2010 2160p EN/ITA/FR/ES/DE OPUS");
+        l.sort();
+        assert_eq!(l, vec!["eng", "fre", "ger", "ita", "spa"]);
+        assert_eq!(languages_of("Movie.2010.1080p.Dual.Latino.Ingles"), vec!["lat"]);
+        assert!(languages_of("Movie.2010.1080p.BluRay.x264-SPARKS").is_empty());
+        let fr = source("X", "Film.2019.MULTi.VFF.1080p", &"a".repeat(40), None, 10, 1, 0);
+        let plain = source("X", "Film.2019.1080p", &"b".repeat(40), None, 10, 1, 0);
+        assert!(score(&fr, "fre") > score(&plain, "fre") + 20.0);
+        assert!(score(&plain, "eng") > score(&fr, "eng"));
+    }
+
+    #[test]
     fn converts_base32_hashes() {
         let m = "magnet:?xt=urn:btih:EQKYQ43ESQYWF6XRZ4SGZ7XDTQW7LBMI&dn=x";
         assert_eq!(hash_from_magnet(m).unwrap().len(), 40);
@@ -551,6 +720,14 @@ mod live {
             println!("  {:>6} {} [{}]", s.seeders, s.title, s.provider);
         }
         assert!(r.sources.iter().any(|s| episode_of(&s.title) == Some((1, 2))));
+
+        let fr = Query { audio_lang: "fre".into(), ..movie.clone() };
+        let r = search(&client, &fr).await.unwrap();
+        println!("--- en francés");
+        for s in r.sources.iter().take(6) {
+            println!("  {:>4.0} {:>5} {:?} {} [{}]", s.score, s.seeders, s.languages, s.title, s.provider);
+        }
+        assert!(r.sources.iter().take(5).any(|s| s.languages.iter().any(|l| l == "fre")));
 
         let anime = Query { text: "Frieren".into(), category: Category::Anime, ..Default::default() };
         let r = search(&client, &anime).await.unwrap();

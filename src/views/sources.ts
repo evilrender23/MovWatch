@@ -2,7 +2,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import * as api from "../api";
 import type { SearchResult, Source, SortBy, TorrentQuery } from "../api";
 import { copyText, withMenu } from "../contextmenu";
-import { episodeLabel, getTorrents, queryFor, rememberSource, type WatchContext } from "../data";
+import { episodeLabel, getTorrents, queryFor, rememberSource, sourceHasLang, type WatchContext } from "../data";
 import { router, type ViewContext } from "../router";
 import { detailRoute, homeRoute, playerRoute } from "../routes";
 import { setCrumbs } from "../shell";
@@ -11,7 +11,11 @@ import { empty, errMsg, errorBox, fmtBytes, h, icon, poster, relativeTime, skele
 const QUALITIES = ["2160p", "1080p", "720p", "480p"] as const;
 
 /** Filtros recordados durante la sesión. */
-const filters = { sort: "smart" as SortBy, quality: null as string | null, spanish: false, hideCam: true };
+const filters = { sort: "smart" as SortBy, quality: null as string | null, lang: false, hideCam: true };
+
+let languageNames: Map<string, string> | null = null;
+api.audioLanguages().then((l) => (languageNames = new Map(l.map((x) => [x.code, x.name]))), () => {});
+const langName = (code: string) => languageNames?.get(code) ?? code;
 
 export function sourcesView(root: HTMLElement, ctx: ViewContext, watch: WatchContext): void {
   const home = { label: "Inicio", onClick: () => router.navigate(homeRoute()) };
@@ -41,7 +45,7 @@ export function sourcesView(root: HTMLElement, ctx: ViewContext, watch: WatchCon
   api.getSettings().then(
     (s) => {
       if (ctx.signal.aborted) return;
-      host.append(sourcesTable(ctx.signal, queryFor(watch, s.preferSpanish), watch));
+      host.append(sourcesTable(ctx.signal, queryFor(watch, s.audioLang), watch));
     },
     (e: unknown) => host.append(errorBox(errMsg(e))),
   );
@@ -52,6 +56,8 @@ export function sourcesView(root: HTMLElement, ctx: ViewContext, watch: WatchCon
  * al reproducir se usa el nombre del torrent como título.
  */
 export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: WatchContext | null): HTMLElement {
+  const lang = query.audioLang ?? "";
+  const langLabel = lang ? langName(lang) : "";
   const box = h("div", { class: "sources" });
   const toolbar = h("div", { class: "src-toolbar" });
   const providersBar = h("div", { class: "src-providers" });
@@ -99,6 +105,7 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
         label,
       );
     toolbar.replaceChildren(
+      ...[
       seg([[null, "Todas"], ...QUALITIES.map((q): [string, string] => [q, q === "2160p" ? "4K" : q])], filters.quality, (v) => (filters.quality = v)),
       seg(
         [
@@ -110,13 +117,14 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
         (v) => (filters.sort = (v ?? "smart") as SortBy),
       ),
       h("span", { class: "src-spacer" }),
-      toggle("Audio en español", filters.spanish, (v) => (filters.spanish = v)),
+      lang ? toggle(`Audio en ${langLabel.toLowerCase()}`, filters.lang, (v) => (filters.lang = v)) : null,
       toggle("Ocultar CAM/TS", filters.hideCam, (v) => (filters.hideCam = v)),
       h(
         "button",
         { class: "icon-btn", attrs: { "aria-label": "Volver a buscar" }, title: "Volver a buscar", onclick: () => void load(true) },
         icon("replay"),
       ),
+      ].filter((x): x is HTMLElement => !!x),
     );
   };
 
@@ -124,7 +132,7 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
     if (!result) return [];
     let out = result.sources.filter((s) => {
       if (filters.quality && s.quality !== filters.quality) return false;
-      if (filters.spanish && !s.tags.some((t) => t === "Español" || t === "Latino" || t === "Dual")) return false;
+      if (filters.lang && lang && !sourceHasLang(s.languages, lang)) return false;
       if (filters.hideCam && s.tags.some((t) => t === "CAM" || t === "TS")) return false;
       return true;
     });
@@ -180,7 +188,7 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
         h(
           "span",
           { class: "src-tags" },
-          ...s.tags.filter((t) => t !== "MP4" || s.provider.includes("YTS")).slice(0, 6).map((t) => h("span", { class: `tag${t === "Español" || t === "Latino" || t === "Dual" ? " tag-es" : t === "CAM" || t === "TS" ? " tag-bad" : ""}` }, t)),
+          ...s.tags.filter((t) => t !== "MP4" || s.provider.includes("YTS")).slice(0, 6).map((t) => h("span", { class: `tag${lang && t === langLabel ? " tag-es" : t === "CAM" || t === "TS" ? " tag-bad" : ""}` }, t)),
           h("span", { class: "src-provider" }, s.provider),
           s.uploaded ? h("span", { class: "src-date" }, relativeTime(s.uploaded * 1000)) : null,
         ),
@@ -205,7 +213,7 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
     try {
       result = await getTorrents({ ...query, sort: "smart" }, refresh);
       if (signal.aborted) return;
-      if (filters.spanish && !result.sources.some((s) => s.tags.includes("Español"))) filters.spanish = false;
+      if (filters.lang && !result.sources.some((s) => sourceHasLang(s.languages, lang))) filters.lang = false;
       renderToolbar();
       renderProviders();
       renderList();
@@ -221,8 +229,8 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
 }
 
 /** Elige la mejor fuente automáticamente (botón "Ver ahora"). */
-export async function bestSource(watch: WatchContext, preferSpanish: boolean, exclude: Set<string> = new Set()): Promise<Source> {
-  const res = await getTorrents({ ...queryFor(watch, preferSpanish), sort: "smart" });
+export async function bestSource(watch: WatchContext, audioLang: string, exclude: Set<string> = new Set()): Promise<Source> {
+  const res = await getTorrents({ ...queryFor(watch, audioLang), sort: "smart" });
   const fresh = res.sources.filter((s) => !exclude.has(s.infoHash));
   const ok = fresh.filter((s) => !s.tags.some((t) => t === "CAM" || t === "TS") && s.seeders >= 3);
   // Tras una fuente lenta, prima las semillas sobre la calidad.

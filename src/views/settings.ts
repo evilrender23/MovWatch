@@ -44,8 +44,8 @@ export function settingsView(root: HTMLElement, ctx: ViewContext): void {
   loadInto(
     body,
     ctx.signal,
-    () => Promise.all([api.getSettings(), api.detectPlayers(), api.detectTools(), api.providersList(), api.downloadDir()]),
-    ([settings, detected, tools, providers, dir]) => renderForm(body, ctx.signal, settings, detected, tools, providers, dir),
+    () => Promise.all([api.getSettings(), api.detectPlayers(), api.detectTools(), api.providersList(), api.downloadDir(), api.audioLanguages()]),
+    ([settings, detected, tools, providers, dir, languages]) => renderForm(body, ctx.signal, settings, detected, tools, providers, dir, languages),
     "Cargando ajustes…",
     () => skeleton("panels", 3, "Cargando ajustes…"),
   );
@@ -80,6 +80,7 @@ function renderForm(
   tools: Tools,
   providers: ProviderInfo[],
   dir: string,
+  languages: api.Language[],
 ): void {
   let player: PlayerKind = settings.player;
 
@@ -115,7 +116,12 @@ function renderForm(
   const ffmpegInput = pathInput(settings.ffmpegPath, "Automática");
   const dirInput = pathInput(settings.downloadDir, dir);
   const keepFiles = switchInput(settings.keepFiles);
-  const preferSpanish = switchInput(settings.preferSpanish);
+  const audioLang = h(
+    "select",
+    { class: "select" },
+    h("option", { value: "", selected: !settings.audioLang }, "Versión original"),
+    ...languages.map((l) => h("option", { value: l.code, selected: settings.audioLang === l.code }, l.name)),
+  );
   const autoNext = switchInput(settings.autoNext);
   const autoUpdate = switchInput(settings.autoUpdate);
   const subLang = h("select", { class: "select" }, ...SUB_LANGS.map(([v, t]) => h("option", { value: v, selected: settings.subtitleLang === v }, t)));
@@ -139,7 +145,7 @@ function renderForm(
           keepFiles: keepFiles.checked,
           disabledProviders: providerSwitches.filter((x) => !x.input.checked).map((x) => x.p.name),
           subtitleLang: subLang.value,
-          preferSpanish: preferSpanish.checked,
+          audioLang: audioLang.value,
           autoNext: autoNext.checked,
           autoUpdate: autoUpdate.checked,
         };
@@ -187,9 +193,13 @@ function renderForm(
     ),
     group(
       "Idioma",
-      null,
-      row("Subtítulos automáticos", "Se cargan solos (de OpenSubtitles) si el torrent no tiene audio en español.", subLang),
-      toggleRow("Priorizar audio en español", "Sube en la lista los torrents en castellano, latino o dual, y elige esa pista de audio.", preferSpanish),
+      "Por ejemplo, para ver las películas dobladas al francés elige Francés en el audio.",
+      row(
+        "Idioma del audio",
+        "Busca también lanzamientos en ese idioma, los pone primero en Fuentes y en «Ver ahora», y elige esa pista al reproducir si el archivo trae varias.",
+        audioLang,
+      ),
+      row("Subtítulos automáticos", "Se cargan solos (de OpenSubtitles) salvo que el audio ya esté en ese idioma.", subLang),
     ),
     group(
       "Reproducción",

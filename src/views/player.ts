@@ -4,7 +4,7 @@ import { openPath } from "@tauri-apps/plugin-opener";
 import * as api from "../api";
 import type { ExternalPlayer, Playback, Probe, Settings, Source, Subtitle, TorrentStatus } from "../api";
 import { copyText, openMenuAt, withMenu, type MenuItem } from "../contextmenu";
-import { episodeLabel, getDetail, recallSource, videoIdOf, type WatchContext } from "../data";
+import { episodeLabel, getDetail, recallSource, sourceHasLang, trackMatches, videoIdOf, type WatchContext } from "../data";
 import { router, type Cleanup, type ViewContext } from "../router";
 import { detailRoute, homeRoute, playerRoute, settingsRoute, sourcesRoute } from "../routes";
 import { setCrumbs } from "../shell";
@@ -495,7 +495,7 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
     triedSources.set(key, tried);
     showOverlay("spin", "Buscando otra fuente con más pares…");
     try {
-      const next = await bestSource(watch, settings.preferSpanish, tried);
+      const next = await bestSource(watch, settings.audioLang, tried);
       if (playback) void api.torrentClose(playback.id, true).catch(() => {});
       playback = null;
       router.replace(playerRoute(watch, next, resumeAt));
@@ -592,7 +592,7 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
       if (!src) {
         if (!watch) throw new Error("No hay ninguna fuente seleccionada.");
         showOverlay("spin", "Buscando la mejor fuente…", "YTS · The Pirate Bay · EZTV · Knaben · TorrentsCSV");
-        src = await bestSource(watch, settings.preferSpanish);
+        src = await bestSource(watch, settings.audioLang);
         if (signal.aborted) return;
       }
       statSource.replaceChildren(h("span", { class: `src-q q-${(src.quality ?? "sd").toLowerCase()}` }, src.quality === "2160p" ? "4K" : (src.quality ?? "SD")), shorten(src.title, 64));
@@ -605,8 +605,12 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
             if (signal.aborted) return;
             subs = list;
             const pref = settings?.subtitleLang;
-            const hasSpanishAudio = src!.tags.some((t) => t === "Español" || t === "Latino");
-            if (pref && !hasSpanishAudio) {
+            // No hacen falta si el audio ya está en el idioma de los subtítulos.
+            const subLangAsAudio = pref === "spl" ? "lat" : pref === "pob" ? "pob" : pref;
+            const audioLang = settings!.audioLang;
+            const sameLang = !!audioLang && (audioLang === subLangAsAudio || (audioLang === "lat" && subLangAsAudio === "spa"));
+            const audioInSubLang = sameLang && sourceHasLang(src!.languages, audioLang);
+            if (pref && !audioInSubLang) {
               const match = pickSubtitle(list, pref, src!.title);
               if (match) void loadSubtitle(match);
             }
@@ -679,8 +683,11 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
       }
       if (probe && probe.audio.length > 1) {
         audioBtn.hidden = false;
-        const pref = settings.preferSpanish ? probe.audio.find((t) => /^(spa|es|esp)/i.test(t.language ?? "") || /espa|castell|latino/i.test(t.title ?? "")) : null;
+        const lang = settings.audioLang;
+        const pref = lang ? probe.audio.find((t) => trackMatches(lang, t.language, t.title)) : null;
         audioTrack = (pref ?? probe.audio.find((t) => t.default) ?? probe.audio[0]).index;
+        if (lang && pref && pref !== probe.audio[0]) toast(`Audio: ${langName(pref.language)}${pref.title ? ` · ${pref.title}` : ""}`, "info");
+        else if (lang && !pref) toast("Esta fuente no tiene audio en el idioma elegido; se usa la pista original.", "info");
       }
 
       if (!probe && !webPlayable) {
@@ -823,6 +830,7 @@ function shorten(s: string, n: number): string {
 const LANGS: Record<string, string> = {
   spa: "Español", es: "Español", esp: "Español", eng: "Inglés", en: "Inglés", fre: "Francés", fra: "Francés", ger: "Alemán", deu: "Alemán",
   ita: "Italiano", por: "Portugués", jpn: "Japonés", kor: "Coreano", rus: "Ruso", chi: "Chino", zho: "Chino", cat: "Catalán", lat: "Latino",
+  fr: "Francés", it: "Italiano", de: "Alemán", pt: "Portugués", ja: "Japonés", ko: "Coreano", ru: "Ruso", hin: "Hindi", pob: "Portugués (Brasil)",
 };
 function langName(code: string | null): string {
   if (!code) return "Pista";
