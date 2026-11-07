@@ -86,7 +86,12 @@ fn no_window(cmd: &mut Command) {
 
 pub async fn probe(ffprobe: &Path, url: &str, file_name: &str) -> Result<Probe> {
     let mut cmd = Command::new(ffprobe);
-    cmd.args(["-v", "error", "-print_format", "json", "-show_format", "-show_streams", url])
+    cmd.args(["-v", "error", "-probesize", "4000000", "-analyzeduration", "8000000"]);
+    // Sin saltos al final del archivo (índice del MKV): con pocos pares tardaría minutos.
+    if url.starts_with("http") {
+        cmd.args(["-seekable", "0"]);
+    }
+    cmd.args(["-print_format", "json", "-show_format", "-show_streams", url])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -204,6 +209,9 @@ impl Remuxer {
         }
         if start > 0.5 {
             cmd.args(["-ss", &format!("{start:.3}")]);
+        } else if input.starts_with("http") {
+            // Desde el principio se lee en orden: nada de saltar al índice del final.
+            cmd.args(["-seekable", "0"]);
         }
         cmd.args(["-i", input, "-map", "0:v:0", "-map", &format!("0:a:{audio}?")]);
         if transcode_video {

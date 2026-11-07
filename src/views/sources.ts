@@ -221,10 +221,14 @@ export function sourcesTable(signal: AbortSignal, query: TorrentQuery, watch: Wa
 }
 
 /** Elige la mejor fuente automáticamente (botón "Ver ahora"). */
-export async function bestSource(watch: WatchContext, preferSpanish: boolean): Promise<Source> {
+export async function bestSource(watch: WatchContext, preferSpanish: boolean, exclude: Set<string> = new Set()): Promise<Source> {
   const res = await getTorrents({ ...queryFor(watch, preferSpanish), sort: "smart" });
-  const ok = res.sources.filter((s) => !s.tags.some((t) => t === "CAM" || t === "TS") && s.seeders >= 3);
-  const pick = ok[0] ?? res.sources[0];
+  const fresh = res.sources.filter((s) => !exclude.has(s.infoHash));
+  const ok = fresh.filter((s) => !s.tags.some((t) => t === "CAM" || t === "TS") && s.seeders >= 3);
+  // Tras una fuente lenta, prima las semillas sobre la calidad.
+  if (exclude.size) ok.sort((a, b) => b.seeders - a.seeders);
+  const pick = ok[0] ?? fresh[0];
+  if (!pick && exclude.size) throw new Error("No quedan más fuentes para probar.");
   if (!pick) {
     const failed = res.providers.filter((p) => p.error).map((p) => p.name);
     throw new Error(

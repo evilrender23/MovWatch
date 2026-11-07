@@ -49,6 +49,10 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
   let activeSub: Subtitle | null = null;
   let lastSaved = 0;
   let restarting = false;
+  let openedAt = 0;
+  let everPlayed = false;
+  let slowOffered = false;
+  let currentSource: Source | null = null;
   let hideTimer = 0;
   const timers: number[] = [];
 
@@ -145,13 +149,13 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
   root.append(h("div", { class: "page player-page" }, stage, infoBar, hints));
 
   // ---- Superposición de estado ----
-  const showOverlay = (iconName: IconName | "spin", text: string, detail?: string | null, actions: HTMLElement[] = []) => {
+  const showOverlay = (iconName: IconName | "spin", text: string, detail?: string | null, actions: HTMLElement[] = [], liveDetail = false) => {
     overlay.hidden = false;
     overlay.replaceChildren(
       ...[
         (iconName === "spin" ? h("div", { class: "spinner" }) : icon(iconName, "icon overlay-icon")) as Element,
         h("p", { class: "overlay-text" }, text),
-        detail ? h("p", { class: "overlay-detail" }, detail) : null,
+        detail ? h("p", { class: liveDetail ? "overlay-detail live" : "overlay-detail" }, detail) : null,
         actions.length ? h("div", { class: "overlay-actions" }, actions) : null,
       ].filter((x): x is Element => !!x),
     );
@@ -406,6 +410,7 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
   video.addEventListener("progress", renderTime);
   video.addEventListener("waiting", () => (bufferBadge.hidden = false));
   video.addEventListener("playing", () => {
+    everPlayed = true;
     bufferBadge.hidden = true;
     hideOverlay();
   });
@@ -468,6 +473,37 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
     }
   };
 
+  // ---- Fuente lenta: ofrecer (y probar) la siguiente mejor ----
+  const checkSlow = () => {
+    if (!watch || everPlayed || slowOffered || !status || !openedAt || mode === "error" || mode === "external") return;
+    const secs = (Date.now() - openedAt) / 1000;
+    if (secs < 25 || status.downSpeed > 400 * 1024) return;
+    slowOffered = true;
+    const actions = overlay.querySelector(".overlay-actions") ?? overlay.appendChild(h("div", { class: "overlay-actions" }));
+    overlay.querySelector(".overlay-text")!.textContent = `Esta fuente va muy lenta (${status.peers} ${status.peers === 1 ? "par" : "pares"}).`;
+    actions.replaceChildren(
+      h("button", { class: "btn btn-sm btn-primary", onclick: () => void tryNextSource() }, icon("bolt"), "Probar otra fuente"),
+      h("button", { class: "btn btn-sm", onclick: () => router.navigate(sourcesRoute(watch)) }, icon("magnet"), "Elegir fuente"),
+    );
+  };
+
+  const tryNextSource = async () => {
+    if (!watch || !settings) return;
+    const key = `${watch.id}:${watch.season ?? ""}:${watch.episode ?? ""}`;
+    const tried = triedSources.get(key) ?? new Set<string>();
+    if (currentSource) tried.add(currentSource.infoHash);
+    triedSources.set(key, tried);
+    showOverlay("spin", "Buscando otra fuente con más pares…");
+    try {
+      const next = await bestSource(watch, settings.preferSpanish, tried);
+      if (playback) void api.torrentClose(playback.id, true).catch(() => {});
+      playback = null;
+      router.replace(playerRoute(watch, next, resumeAt));
+    } catch (e) {
+      fail(errMsg(e));
+    }
+  };
+
   // ---- Estadísticas del torrent ----
   const pollStatus = async () => {
     if (!playback || signal.aborted) return;
@@ -483,9 +519,9 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
     statProgress.textContent = status.finished ? "Descargado" : `${Math.floor(p * 100)} % · ${fmtBytes(status.downloaded)} de ${fmtBytes(status.total)}`;
     (statMeter.firstChild as HTMLElement).style.setProperty("--p", String(p));
     bufferBadge.textContent = `Cargando · ${fmtSpeed(status.downSpeed)} · ${status.peers} pares`;
-    if (mode === "loading" && overlay.querySelector(".overlay-detail")) {
-      overlay.querySelector(".overlay-detail")!.textContent = `${fmtSpeed(status.downSpeed)} · ${status.peers} pares conectados · ${Math.floor(p * 1000) / 10} %`;
-    }
+    const detail = overlay.hidden ? null : overlay.querySelector(".overlay-detail.live");
+    if (detail) detail.textContent = `${fmtSpeed(status.downSpeed)} · ${status.peers} pares conectados · ${fmtBytes(status.downloaded)}`;
+    checkSlow();
     renderTime();
   };
 
@@ -589,6 +625,8 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
       timers.push(tick);
       playback = await api.torrentOpen(src.magnet, displayTitle(), watch?.season, watch?.episode);
       window.clearInterval(tick);
+      openedAt = Date.now();
+      currentSource = src;
       if (signal.aborted) return;
       timers.push(window.setInterval(() => void pollStatus(), 1000));
       void pollStatus();
@@ -605,32 +643,45 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
         return;
       }
 
-      showOverlay("spin", "Preparando el video…", "Leyendo el principio del archivo");
-      try {
-        probe = await api.mediaProbe(playback.id, playback.file);
-      } catch (e) {
-        console.warn("mediaProbe", e);
-        probe = null;
+      const tools = await api.detectTools().catch(() => ({ ffmpeg: null, ffprobe: null }));
+      const fileName = playback.files[playback.file]?.name ?? "";
+      const webPlayable = /\.(mp4|m4v|webm|mov)$/i.test(fileName);
+      if (tools.ffprobe) {
+        showOverlay("spin", "Preparando el video…", "Leyendo el principio del archivo", [], true);
+        try {
+          probe = await api.mediaProbe(playback.id, playback.file);
+        } catch (e) {
+          console.warn("mediaProbe", e);
+          probe = null;
+        }
+        if (signal.aborted) return;
       }
-      if (signal.aborted) return;
+      // Sin análisis (sin ffprobe o la fuente va muy lenta): se decide por la extensión.
+      if (!probe && tools.ffmpeg && !webPlayable) {
+        probe = { duration: null, container: "", videoCodec: null, pixFmt: null, width: null, height: null, audio: [], subtitles: [], direct: false, transcodeVideo: false };
+      }
       if (probe && probe.audio.length > 1) {
         audioBtn.hidden = false;
         const pref = settings.preferSpanish ? probe.audio.find((t) => /^(spa|es|esp)/i.test(t.language ?? "") || /espa|castell|latino/i.test(t.title ?? "")) : null;
         audioTrack = (pref ?? probe.audio.find((t) => t.default) ?? probe.audio[0]).index;
       }
 
+      if (!probe && !webPlayable) {
+        statMode.textContent = "Necesita ffmpeg";
+        fail(`La vista integrada no reproduce archivos ${fileName.split(".").pop()?.toUpperCase() ?? ""} sin ffmpeg.`, needFfmpegActions());
+        return;
+      }
       if (!probe || probe.direct) {
         mode = "direct";
-        statMode.textContent = probe ? "Directo" : "Directo (sin ffmpeg)";
-        showOverlay("spin", "Cargando…", `${fmtSpeed(status?.downSpeed ?? 0)} · ${status?.peers ?? 0} pares`);
-        mode = "direct";
+        statMode.textContent = "Directo";
+        showOverlay("spin", "Cargando…", "Esperando datos del torrent…", [], true);
         video.src = playback.url;
         if (resumeAt > 5) video.addEventListener("loadedmetadata", () => (video.currentTime = resumeAt), { once: true });
         void video.play().catch(() => {});
       } else {
         statMode.textContent = probe.transcodeVideo ? "Convirtiendo (ffmpeg)" : "Reempaquetado (ffmpeg)";
         mode = "loading";
-        showOverlay("spin", "Cargando…", `${fmtSpeed(status?.downSpeed ?? 0)} · ${status?.peers ?? 0} pares`);
+        showOverlay("spin", "Cargando…", "Esperando datos del torrent…", [], true);
         await startHls(resumeAt > 5 ? resumeAt : 0);
       }
     } catch (e) {
@@ -744,6 +795,9 @@ export function playerView(root: HTMLElement, ctx: ViewContext, watch: WatchCont
 // ---------------------------------------------------------------------------
 
 const popMenu = openMenuAt;
+
+/** Fuentes ya probadas (lentas) por película/episodio durante la sesión. */
+const triedSources = new Map<string, Set<string>>();
 
 function shorten(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 1)}…` : s;
