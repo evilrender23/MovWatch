@@ -36,7 +36,7 @@ export function settingsView(root: HTMLElement, ctx: ViewContext): void {
         { class: "page-head" },
         h("p", { class: "eyebrow" }, "Preferencias"),
         h("h1", { class: "display" }, "Ajustes"),
-        h("p", { class: "lede" }, "Reproducción, subtítulos, proveedores de torrents y descargas. Los cambios se aplican al pulsar Guardar."),
+        h("p", { class: "lede" }, "Reproducción, subtítulos, proveedores de torrents y descargas. Los cambios se guardan al momento."),
       ),
       body,
     ),
@@ -144,44 +144,62 @@ function renderForm(
     return { p, input };
   });
 
-  const saveBtn: HTMLButtonElement = h(
-    "button",
-    {
-      class: "btn btn-primary",
-      onclick: async () => {
-        const next: Settings = {
-          player,
-          mpvPath: mpvInput.value.trim() || null,
-          vlcPath: vlcInput.value.trim() || null,
-          ffmpegPath: ffmpegInput.value.trim() || null,
-          downloadDir: dirInput.value.trim() || null,
-          keepFiles: keepFiles.checked,
-          disabledProviders: providerSwitches.filter((x) => !x.input.checked).map((x) => x.p.name),
-          subtitleLang: subLang.value,
-          audioLang: audioLang.value,
-          onlyAudioLang: onlyLang.checked,
-          autoNext: autoNext.checked,
-          autoUpdate: autoUpdate.checked,
-        };
-        saveBtn.disabled = true;
-        try {
-          await api.saveSettings(next);
-          toast(next.downloadDir !== settings.downloadDir ? "Ajustes guardados. La nueva carpeta se usará al reiniciar." : "Ajustes guardados.", "ok");
-          settings = next;
-          Promise.all([api.detectPlayers(), api.detectTools()]).then(
-            ([d, t]) => !signal.aborted && showDetected(d, t),
-            () => {},
-          );
-        } catch (e) {
-          toast(errMsg(e), "error");
-        } finally {
-          saveBtn.disabled = false;
-        }
-      },
-    },
-    icon("save"),
-    "Guardar cambios",
-  );
+  // Guardado automático: cada cambio se guarda al momento (los campos de texto, al dejar de escribir).
+  const saveState = h("span", { class: "save-state", attrs: { "aria-live": "polite" } });
+  let saveTimer = 0;
+  let saving: Promise<void> = Promise.resolve();
+  const collect = (): Settings => ({
+    player,
+    mpvPath: mpvInput.value.trim() || null,
+    vlcPath: vlcInput.value.trim() || null,
+    ffmpegPath: ffmpegInput.value.trim() || null,
+    downloadDir: dirInput.value.trim() || null,
+    keepFiles: keepFiles.checked,
+    disabledProviders: providerSwitches.filter((x) => !x.input.checked).map((x) => x.p.name),
+    subtitleLang: subLang.value,
+    audioLang: audioLang.value,
+    onlyAudioLang: onlyLang.checked,
+    autoNext: autoNext.checked,
+    autoUpdate: autoUpdate.checked,
+  });
+  const save = () => {
+    window.clearTimeout(saveTimer);
+    const next = collect();
+    if (JSON.stringify(next) === JSON.stringify(settings)) return;
+    saveState.textContent = "Guardando…";
+    saveState.className = "save-state";
+    saving = saving.then(async () => {
+      try {
+        await api.saveSettings(next);
+        const dirChanged = next.downloadDir !== settings.downloadDir;
+        settings = next;
+        saveState.textContent = "Guardado";
+        saveState.className = "save-state ok";
+        if (dirChanged) toast("La nueva carpeta de descargas se usará al reiniciar MovWatch.", "info");
+        Promise.all([api.detectPlayers(), api.detectTools()]).then(
+          ([d, t]) => !signal.aborted && showDetected(d, t),
+          () => {},
+        );
+      } catch (e) {
+        saveState.textContent = "No se pudo guardar";
+        saveState.className = "save-state error";
+        toast(errMsg(e), "error");
+      }
+    });
+  };
+  const saveSoon = (ms: number) => {
+    window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(save, ms);
+  };
+  body.previousElementSibling?.append(saveState);
+  body.addEventListener("change", () => saveSoon(0));
+  body.addEventListener("input", (e) => {
+    if (e.target instanceof HTMLInputElement && e.target.type === "text") saveSoon(700);
+  });
+  // Al salir de Ajustes con algo pendiente, se guarda igualmente.
+  signal.addEventListener("abort", () => {
+    if (saveTimer) save();
+  });
 
   const openBtn = (url: string, text = "Descargar") =>
     h("button", { class: "btn btn-sm btn-quiet", onclick: () => openUrl(url).catch((e: unknown) => toast(errMsg(e), "error")) }, icon("external"), text);
@@ -239,7 +257,6 @@ function renderForm(
       row("Carpeta", "Se aplica al reiniciar la app.", dirInput, "set-row-field"),
       toggleRow("Conservar los archivos", "No borrar las películas y episodios al cerrar el torrent o la app.", keepFiles),
     ),
-    h("div", { class: "settings-save" }, saveBtn),
     updatesGroup(signal, autoUpdate),
     group(
       "Reproductores externos",
@@ -326,7 +343,7 @@ function updatesGroup(signal: AbortSignal, autoUpdate: HTMLInputElement): HTMLEl
       h("div", { class: "set-text" }, h("span", { class: "set-label" }, "Versión instalada ", version), branch),
       h("div", { class: "set-actions" }, downloadBtn, checkBtn),
     ),
-    toggleRow("Actualizar automáticamente", "Se aplica al pulsar Guardar cambios.", autoUpdate),
+    toggleRow("Actualizar automáticamente", "Busca y compila versiones nuevas en segundo plano.", autoUpdate),
     h("div", { class: "set-status-wrap" }, status, meter),
   );
 }

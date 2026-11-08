@@ -4315,3 +4315,22 @@ body.is-cinema .stage-cinema {
 .tile[hidden] {
   display: none;
 }
+
+.save-state {
+  min-height: 16px;
+  color: var(--text-4);
+  font-family: var(--font-mono);
+  font-size: var(--fs-tool);
+}
+
+.save-state.ok {
+  color: color-mix(in srgb, var(--green) 80%, var(--base));
+}
+
+.save-state.ok::before {
+  content: "✓ ";
+}
+
+.save-state.error {
+  color: color-mix(in srgb, var(--red) 80%, var(--base));
+}

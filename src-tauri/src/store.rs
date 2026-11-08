@@ -361,6 +361,19 @@ mod tests {
     }
 
     #[test]
+    fn settings_persist() {
+        let dir = temp_dir("settings");
+        let store = Store::open(dir.clone());
+        let s = Settings { audio_lang: "fre".into(), only_audio_lang: true, disabled_providers: vec!["EZTV".into()], ffmpeg_path: Some("  \"/x/ffmpeg\" ".into()), ..Settings::default() };
+        store.save_settings(s).unwrap();
+        let back = Store::open(dir.clone()).settings();
+        assert_eq!((back.audio_lang.as_str(), back.only_audio_lang), ("fre", true));
+        assert_eq!(back.disabled_providers, vec!["EZTV".to_string()]);
+        assert_eq!(back.ffmpeg_path.as_deref(), Some("/x/ffmpeg"));
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn progress_orders_and_marks_watched() {
         let dir = temp_dir("hist");
         let store = Store::open(dir.clone());
