@@ -45,7 +45,13 @@ AAC) y puedes saltar a cualquier minuto. Sin ffmpeg, esos archivos se abren en m
 brew install ffmpeg        # macOS
 winget install ffmpeg      # Windows
 sudo apt install ffmpeg    # Debian/Ubuntu
+sudo pacman -S ffmpeg      # Arch
 ```
+
+En Linux la vista web (WebKitGTK) reproduce con GStreamer y necesita sus complementos *base* y
+*good*; sin ellos el reproductor integrado se queda cargando. El instalador los añade solo. A mano:
+`gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav` en Arch,
+`gstreamer1.0-plugins-{base,good,bad} gstreamer1.0-libav` en Debian/Ubuntu.
 
 ## Instalación
 

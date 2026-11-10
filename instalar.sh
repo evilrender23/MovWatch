@@ -24,7 +24,8 @@
 #
 # Instala solo, avisando, todo lo que falte para compilar: en Mac, las herramientas de línea de
 # comandos de Xcode (con la ventana de macOS); en Linux, un compilador de C, git, curl, pkg-config y
-# WebKitGTK (con el gestor de paquetes: sudo o la ventana de contraseña); en los dos, Rust (rustup,
+# WebKitGTK con los complementos de GStreamer que usa para reproducir video (con el gestor de
+# paquetes: sudo o la ventana de contraseña); en los dos, Rust (rustup,
 # en ~/.cargo) y Node.js (el oficial, en <destino>/node, si no hay uno de 20.19 o más nuevo).
 #
 # Actualizaciones: la app lo relanza con --actualizar --esperar-pid <su pid> --relanzar. Así no
@@ -59,7 +60,7 @@ while [ $# -gt 0 ]; do
         --actualizar) ACTUALIZAR=true; shift ;;
         --esperar-pid) ESPERAR_PID="$2"; shift 2 ;;
         --relanzar) RELANZAR=true; shift ;;
-        -h|--help) sed -n '2,31p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,33p' "${BASH_SOURCE[0]:-/dev/null}" 2>/dev/null | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "Opción desconocida: $1" >&2; exit 2 ;;
     esac
 done
@@ -164,20 +165,32 @@ ejecutar() {
 
 # ---------------------------------------------------------------- requisitos
 
-# Paquetes de desarrollo de WebKitGTK y compañía que pide Tauri 2 (https://v2.tauri.app/start/prerequisites/).
+# Paquetes de desarrollo de WebKitGTK y compañía que pide Tauri 2 (https://v2.tauri.app/start/prerequisites/),
+# más los complementos de GStreamer: WebKitGTK reproduce el video con ellos y no los trae como
+# dependencia. Sin «good» no hay salida de audio (autoaudiosink) ni lector de MP4 (qtdemux), y el
+# reproductor integrado se queda cargando.
 PM=''
 PAQUETES=''
 if $LINUX; then
-    if tiene apt-get; then PM=apt; PAQUETES='build-essential curl wget file git pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev'
-    elif tiene dnf; then PM=dnf; PAQUETES='gcc gcc-c++ make curl wget file git pkgconf-pkg-config webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel'
-    elif tiene pacman; then PM=pacman; PAQUETES='base-devel curl wget file git pkgconf webkit2gtk-4.1 openssl appmenu-gtk-module libappindicator-gtk3 librsvg xdotool'
-    elif tiene zypper; then PM=zypper; PAQUETES='gcc gcc-c++ make curl wget file git pkg-config webkit2gtk3-devel libopenssl-devel libappindicator3-1 librsvg-devel'
+    if tiene apt-get; then PM=apt; PAQUETES='build-essential curl wget file git pkg-config libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav'
+    elif tiene dnf; then PM=dnf; PAQUETES='gcc gcc-c++ make curl wget file git pkgconf-pkg-config webkit2gtk4.1-devel openssl-devel libappindicator-gtk3-devel librsvg2-devel libxdo-devel gstreamer1-plugins-base gstreamer1-plugins-good gstreamer1-plugins-bad-free'
+    elif tiene pacman; then PM=pacman; PAQUETES='base-devel curl wget file git pkgconf webkit2gtk-4.1 openssl appmenu-gtk-module libappindicator-gtk3 librsvg xdotool gst-plugins-base gst-plugins-good gst-plugins-bad gst-libav'
+    elif tiene zypper; then PM=zypper; PAQUETES='gcc gcc-c++ make curl wget file git pkg-config webkit2gtk3-devel libopenssl-devel libappindicator3-1 librsvg-devel gstreamer-plugins-base gstreamer-plugins-good'
     fi
 fi
 
 hay_xcode() { xcode-select -p >/dev/null 2>&1 && tiene git; }
+# Complementos de GStreamer que necesita el reproductor integrado. Sin gst-inspect-1.0 no se puede
+# saber: se dan por buenos para no bloquear la instalación.
+hay_gstreamer() {
+    local e
+    tiene gst-inspect-1.0 || return 0
+    for e in playbin autoaudiosink qtdemux; do
+        gst-inspect-1.0 --exists "$e" >/dev/null 2>&1 || return 1
+    done
+}
 hay_sistema() {
-    tiene cc && tiene git && tiene curl && tiene pkg-config && pkg-config --exists webkit2gtk-4.1 2>/dev/null
+    tiene cc && tiene git && tiene curl && tiene pkg-config && pkg-config --exists webkit2gtk-4.1 2>/dev/null && hay_gstreamer
 }
 hay_rust() { tiene cargo && tiene rustc && rustc --version >/dev/null 2>&1; }
 # Vite 8 necesita Node.js ^20.19.0 o >=22.12.0.
@@ -219,7 +232,7 @@ instalar_sistema() {
         dnf) como_admin dnf install -y $PAQUETES ;;
         pacman) como_admin pacman -S --needed --noconfirm $PAQUETES ;;
         zypper) como_admin zypper --non-interactive install $PAQUETES ;;
-        *) fallar "No se reconoce el gestor de paquetes: instala a mano un compilador de C, git, curl, pkg-config y WebKitGTK 4.1 (https://v2.tauri.app/start/prerequisites/)." ;;
+        *) fallar "No se reconoce el gestor de paquetes: instala a mano un compilador de C, git, curl, pkg-config, WebKitGTK 4.1 (https://v2.tauri.app/start/prerequisites/) y los complementos base y good de GStreamer." ;;
     esac
 }
 
@@ -268,7 +281,7 @@ if $LINUX; then REQUISITOS='sistema rust'; else REQUISITOS='xcode rust'; fi
 nombre_de() {
     case "$1" in
         xcode) echo 'las herramientas de línea de comandos de Xcode (compilador de C y Git)' ;;
-        sistema) echo 'un compilador de C, Git, curl, pkg-config y WebKitGTK (paquetes del sistema)' ;;
+        sistema) echo 'un compilador de C, Git, curl, pkg-config, WebKitGTK y los complementos de GStreamer para el video (paquetes del sistema)' ;;
         rust) echo 'Rust (rustup)' ;;
     esac
 }
